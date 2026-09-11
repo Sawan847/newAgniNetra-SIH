@@ -4,6 +4,85 @@ A geospatial prototype for **AI-Based Detection and Classification of Industrial
 
 **Current status:** working application code, observed NASA/OSM snapshot, data imports, geospatial enrichment, analyst review and a supervised training pipeline. Real incident-classification accuracy has **not** been established. Missing evidence stays missing; synthetic models are refused by operational inference.
 
+## Fastest working setup — no Docker, no database server, no API key
+
+Five commands from a clean clone to a dashboard with classified data in it. This is
+the path to use if anything else in this README has failed you.
+
+**1. Configuration.** `.env.example` defaults to SQLite, so no database server is
+needed.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+**2. Python dependencies.**
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --only-binary=:all: -r backend/requirements.txt
+```
+
+**3. Build the dataset and train.** This step is not optional — without it there is
+no model artifact and no classified data, and the dashboard will correctly render
+empty panels.
+
+```powershell
+.\.venv\Scripts\python.exe scripts/build_dataset.py --source sim
+```
+
+Writes `ml/artifacts/thermal_classifier.joblib` and `ml/artifacts/model_card.json`.
+`--source sim` uses the offline detection simulator, so no NASA key is required.
+
+**4. Load it into the database.**
+
+```powershell
+.\.venv\Scripts\python.exe scripts/seed_from_pipeline.py --reset --limit 12000
+```
+
+**5. Run both servers**, in two terminals, from the project root:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --port 8000
+```
+
+```powershell
+npm install --prefix frontend
+npm run dev --prefix frontend
+```
+
+Open **http://localhost:5173**. API docs at **http://localhost:8000/docs**.
+
+### With real NASA data
+
+Get a free instant key at
+[firms.modaps.eosdis.nasa.gov/api/map_key](https://firms.modaps.eosdis.nasa.gov/api/map_key/),
+put it in `.env` as `FIRMS_MAP_KEY`, then replace step 3 with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/build_dataset.py --source firms --sources VIIRS_SNPP_SP --bbox 68,18,88,33 --start 2026-03-05 --days 50
+.\.venv\Scripts\python.exe scripts/seed_from_pipeline.py --reset --from-processed data/processed/labelled_detections.csv --limit 25000
+```
+
+`VIIRS_SNPP_SP` is the standard-processing archive, which reaches back to 2012. The
+near-real-time products retain only about two months, and India's fire regime is
+strongly seasonal — paddy residue burns Oct–Nov, wheat residue Apr–May, forest fires
+Feb–Jun — so a live NRT pull landing in the monsoon contains almost no agricultural
+or vegetation fire to classify. The March–April window above covers forest fire
+season and the start of rabi stubble burning.
+
+### Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| Every panel reads 0 | Step 3 and 4 were skipped — there is no model and no data |
+| `Model Intelligence` says "No model trained" | Step 3 was skipped |
+| `ModuleNotFoundError` on startup | Step 2 incomplete; run it from the project root |
+| pip fails building `pydantic-core` | Very recent Python; the `--only-binary=:all:` flag above avoids it |
+| Dashboard looks stale after a rebuild | Hard-refresh the browser (Ctrl+Shift+R) |
+
+---
+
 ## Try the observed-data map now
 
 The repository includes a dated snapshot of **2,782 NASA FIRMS VIIRS observations (3–10 September 2026)** in an India bounding box, plus **10 OSM facilities around Jamnagar**. A bounding box also includes portions of neighbouring countries; these are not an India administrative-boundary clip. These are observations, not verified industrial-fire labels.
