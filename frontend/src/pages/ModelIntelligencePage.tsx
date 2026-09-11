@@ -35,7 +35,7 @@ export function ModelIntelligencePage() {
       .finally(() => {
         setLoading(false);
       });
-  }, []);
+  }, [addToast]);
 
   const evalMetrics = metrics?.evaluation_metrics || {};
 

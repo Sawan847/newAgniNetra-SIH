@@ -1,282 +1,669 @@
-"""AgniNetra AI — Comprehensive Feature Engineering Module.
+"""
+Feature engineering utilities for AgniNetra.
 
-Computes thermal, spatial proximity, historical persistence, DBSCAN cluster spread,
-and satellite spectral features for the two-stage fire classification engine.
+This module converts raw NASA FIRMS thermal information and contextual
+GIS information into clean numeric features that can be used by the
+machine-learning pipeline.
+
+Contextual information includes:
+
+- Thermal characteristics
+- Industrial proximity
+- Forest proximity
+- Land-cover information
+- Historical/persistent thermal activity
 """
 
 from __future__ import annotations
 
-import datetime
-from typing import Any, Dict, List, Optional, Tuple
-import numpy as np
-import pandas as pd
-from sklearn.cluster import DBSCAN
-
-from ml.config import FEATURE_COLUMNS
+from typing import Any, Dict, Mapping, Optional
 
 
-def compute_persistence_score(
-    hotspots: pd.DataFrame,
-    radius_km: float = 2.0,
-    window_days: int = 7,
-) -> pd.Series:
-    """Count recurrence of thermal anomalies within a spatial radius over a temporal window."""
-    if hotspots.empty:
-        return pd.Series(dtype=float)
+# ============================================================
+# Helper functions
+# ============================================================
 
-    result = np.zeros(len(hotspots), dtype=float)
-    dates = pd.to_datetime(hotspots["acq_date"])
-    lats = hotspots["latitude"].values
-    lons = hotspots["longitude"].values
+def _safe_float(
+    value: Any,
+    default: float = 0.0
+) -> float:
+    """
+    Convert a value to float safely.
 
-    for i in range(len(hotspots)):
-        time_mask = (dates >= dates.iloc[i] - pd.Timedelta(days=window_days)) & (
-            dates <= dates.iloc[i]
-        )
-        spatial_dist = _haversine_vectorized(lats[i], lons[i], lats, lons)
-        nearby = (spatial_dist <= radius_km) & time_mask.values
-        result[i] = max(int(nearby.sum()) - 1, 0)
+    If the value is None, empty, or invalid,
+    the supplied default value is returned.
+    """
 
-    return pd.Series(result, index=hotspots.index, name=f"persistence_score_{window_days}d")
+    if value is None:
+        return default
+
+    if isinstance(value, str):
+        value = value.strip()
+
+        if value == "":
+            return default
+
+        # FIRMS confidence may occasionally be represented
+        # using strings rather than purely numeric values.
+        confidence_mapping = {
+            "low": 30.0,
+            "nominal": 60.0,
+            "high": 90.0,
+            "l": 30.0,
+            "n": 60.0,
+            "h": 90.0,
+        }
+
+        lower_value = value.lower()
+
+        if lower_value in confidence_mapping:
+            return confidence_mapping[lower_value]
+
+    try:
+        return float(value)
+
+    except (TypeError, ValueError):
+        return default
 
 
-def compute_historical_frp_baselines(
-    hotspots: pd.DataFrame,
-    radius_km: float = 3.0,
-    window_days: int = 90,
-) -> Tuple[pd.Series, pd.Series, pd.Series]:
-    """Compute historical median FRP, historical max FRP, and current-to-historical FRP ratio."""
-    if hotspots.empty or "frp" not in hotspots.columns:
-        empty = pd.Series(dtype=float)
-        return empty, empty, empty
+def _safe_int(
+    value: Any,
+    default: int = 0
+) -> int:
+    """
+    Convert a value to integer safely.
+    """
 
-    n = len(hotspots)
-    median_frp = np.zeros(n, dtype=float)
-    max_frp = np.zeros(n, dtype=float)
-    ratio_frp = np.ones(n, dtype=float)
+    if value is None:
+        return default
 
-    dates = pd.to_datetime(hotspots["acq_date"])
-    lats = hotspots["latitude"].values
-    lons = hotspots["longitude"].values
-    frps = hotspots["frp"].fillna(0.0).values
+    try:
+        return int(float(value))
 
-    for i in range(n):
-        time_mask = (dates >= dates.iloc[i] - pd.Timedelta(days=window_days)) & (
-            dates < dates.iloc[i]  # strictly prior
-        )
-        spatial_dist = _haversine_vectorized(lats[i], lons[i], lats, lons)
-        nearby_mask = (spatial_dist <= radius_km) & time_mask.values
+    except (TypeError, ValueError):
+        return default
 
-        if nearby_mask.any():
-            hist_vals = frps[nearby_mask]
-            med = float(np.median(hist_vals))
-            mx = float(np.max(hist_vals))
-            median_frp[i] = round(med, 2)
-            max_frp[i] = round(mx, 2)
-            ratio_frp[i] = round(float(frps[i] / (med + 1e-3)), 2)
-        else:
-            median_frp[i] = round(float(frps[i]), 2)
-            max_frp[i] = round(float(frps[i]), 2)
-            ratio_frp[i] = 1.0
 
-    return (
-        pd.Series(median_frp, index=hotspots.index, name="historical_median_frp"),
-        pd.Series(max_frp, index=hotspots.index, name="historical_max_frp"),
-        pd.Series(ratio_frp, index=hotspots.index, name="frp_to_historical_ratio"),
+def _safe_bool(value: Any) -> bool:
+    """
+    Convert different value formats into Boolean values.
+    """
+
+    if isinstance(value, bool):
+        return value
+
+    if value is None:
+        return False
+
+    if isinstance(value, (int, float)):
+        return value != 0
+
+    if isinstance(value, str):
+
+        return value.strip().lower() in {
+            "true",
+            "1",
+            "yes",
+            "y",
+            "industrial",
+        }
+
+    return bool(value)
+
+
+def _get_value(
+    source: Any,
+    key: str,
+    default: Any = None
+) -> Any:
+    """
+    Safely retrieve a value from either:
+
+    - dictionary
+    - Pydantic object
+    - SQLAlchemy model
+    - normal Python object
+    """
+
+    if source is None:
+        return default
+
+    if isinstance(source, Mapping):
+        return source.get(key, default)
+
+    return getattr(source, key, default)
+
+
+# ============================================================
+# Land-cover helpers
+# ============================================================
+
+def normalise_landcover(
+    landcover: Optional[str]
+) -> str:
+    """
+    Normalize land-cover text so that different GIS providers
+    can be interpreted consistently.
+    """
+
+    if not landcover:
+        return "unknown"
+
+    value = str(landcover).strip().lower()
+
+    # Industrial areas
+    industrial_terms = (
+        "industrial",
+        "factory",
+        "refinery",
+        "power plant",
+        "petrochemical",
+        "steel",
+        "terminal",
     )
 
+    if any(term in value for term in industrial_terms):
+        return "industrial"
 
-def compute_daynight_flag(hotspots: pd.DataFrame) -> pd.Series:
-    """Convert FIRMS daynight column to boolean integer (1 for Night, 0 for Day)."""
-    if "daynight" not in hotspots.columns:
-        return pd.Series(0, index=hotspots.index, name="is_nighttime")
-    return hotspots["daynight"].astype(str).str.upper().eq("N").astype(int).rename("is_nighttime")
-
-
-def compute_day_of_year(hotspots: pd.DataFrame) -> pd.Series:
-    """Extract day of year (1-366) from acquisition date."""
-    if "acq_date" not in hotspots.columns:
-        return pd.Series(1, index=hotspots.index, name="day_of_year")
-    return pd.to_datetime(hotspots["acq_date"]).dt.dayofyear.rename("day_of_year")
-
-
-def compute_cluster_spread_features(
-    hotspots: pd.DataFrame,
-    eps_km: float = 3.0,
-    min_samples: int = 2,
-) -> Tuple[pd.Series, pd.Series, pd.Series]:
-    """Compute DBSCAN cluster size, spread radius (km), and principal elongation direction (deg)."""
-    n = len(hotspots)
-    if n == 0:
-        empty = pd.Series(dtype=float)
-        return empty, empty, empty
-
-    coords = hotspots[["latitude", "longitude"]].values
-    kms_per_radian = 6371.0088
-    epsilon = eps_km / kms_per_radian
-
-    rad_coords = np.radians(coords)
-    db = DBSCAN(eps=epsilon, min_samples=min_samples, metric="haversine").fit(rad_coords)
-    labels = db.labels_
-
-    sizes = np.ones(n, dtype=int)
-    spreads = np.zeros(n, dtype=float)
-    directions = np.zeros(n, dtype=float)
-
-    for i in range(n):
-        lbl = labels[i]
-        if lbl != -1:
-            cluster_indices = np.where(labels == lbl)[0]
-            c_coords = coords[cluster_indices]
-            sizes[i] = len(cluster_indices)
-
-            centroid = np.mean(c_coords, axis=0)
-            dists = _haversine_vectorized(centroid[0], centroid[1], c_coords[:, 0], c_coords[:, 1])
-            spreads[i] = round(float(np.max(dists)), 3)
-
-            if len(cluster_indices) >= 2:
-                d_lat = c_coords[:, 0] - centroid[0]
-                d_lon = c_coords[:, 1] - centroid[1]
-                cov = np.cov(d_lat, d_lon)
-                if cov.shape == (2, 2):
-                    eigvals, eigvecs = np.linalg.eigh(cov)
-                    p_vec = eigvecs[:, np.argmax(eigvals)]
-                    angle_deg = float(np.degrees(np.arctan2(float(p_vec[1]), float(p_vec[0]))) % 360.0)
-                    directions[i] = round(angle_deg, 1)
-
-    return (
-        pd.Series(sizes, index=hotspots.index, name="cluster_size"),
-        pd.Series(spreads, index=hotspots.index, name="cluster_spread_km"),
-        pd.Series(directions, index=hotspots.index, name="cluster_direction_deg"),
+    # Forest / natural vegetation
+    forest_terms = (
+        "forest",
+        "wood",
+        "woodland",
+        "scrub",
+        "vegetation",
     )
 
+    if any(term in value for term in forest_terms):
+        return "forest"
+
+    # Agriculture
+    agricultural_terms = (
+        "farm",
+        "farmland",
+        "crop",
+        "agriculture",
+        "agricultural",
+        "plantation",
+    )
+
+    if any(term in value for term in agricultural_terms):
+        return "agricultural"
+
+    # Mining
+    mining_terms = (
+        "mine",
+        "mining",
+        "quarry",
+    )
+
+    if any(term in value for term in mining_terms):
+        return "mining"
+
+    # Urban / built-up
+    urban_terms = (
+        "urban",
+        "residential",
+        "commercial",
+        "built",
+    )
+
+    if any(term in value for term in urban_terms):
+        return "urban"
+
+    return value
+
+
+# ============================================================
+# Context feature engineering
+# ============================================================
+
+def build_context_features(
+    brightness: float = 0,
+    bright_t31: float = 0,
+    frp: float = 0,
+    confidence: float = 0,
+    industrial_distance_m: float = 999999,
+    forest_distance_m: float = 999999,
+    detections_7d: int = 0,
+    active_days_30d: int = 0,
+    is_industrial_land: bool = False,
+    is_forest_land: bool = False,
+    is_agricultural_land: bool = False,
+    is_mining_land: bool = False,
+) -> Dict[str, float]:
+    """
+    Build contextual ML features for a thermal anomaly.
+
+    These features combine NASA FIRMS thermal information with
+    GIS/land-cover and historical information.
+
+    This makes AgniNetra different from a normal FIRMS hotspot
+    visualisation system.
+    """
+
+    brightness = _safe_float(brightness)
+
+    bright_t31 = _safe_float(bright_t31)
+
+    frp = _safe_float(frp)
+
+    confidence = _safe_float(confidence)
+
+    industrial_distance_m = _safe_float(
+        industrial_distance_m,
+        999999.0
+    )
+
+    forest_distance_m = _safe_float(
+        forest_distance_m,
+        999999.0
+    )
+
+    detections_7d = _safe_int(detections_7d)
+
+    active_days_30d = _safe_int(active_days_30d)
+
+    # --------------------------------------------------------
+    # Derived proximity features
+    # --------------------------------------------------------
+
+    near_industry_500m = int(
+        industrial_distance_m <= 500
+    )
+
+    near_industry_2km = int(
+        industrial_distance_m <= 2000
+    )
+
+    near_industry_5km = int(
+        industrial_distance_m <= 5000
+    )
+
+    near_forest_2km = int(
+        forest_distance_m <= 2000
+    )
+
+    # --------------------------------------------------------
+    # Persistent thermal-source feature
+    # --------------------------------------------------------
+
+    persistent_source = int(
+        detections_7d >= 4
+        or active_days_30d >= 8
+    )
+
+    # --------------------------------------------------------
+    # Thermal-strength indicators
+    # --------------------------------------------------------
+
+    high_frp = int(
+        frp >= 20
+    )
+
+    very_high_frp = int(
+        frp >= 50
+    )
+
+    high_confidence = int(
+        confidence >= 60
+    )
+
+    return {
+
+        # ====================================================
+        # NASA FIRMS / thermal features
+        # ====================================================
+
+        "brightness": brightness,
+
+        "bright_t31": bright_t31,
+
+        "frp": frp,
+
+        "confidence": confidence,
+
+        # ====================================================
+        # GIS proximity features
+        # ====================================================
+
+        "industrial_distance_m":
+            industrial_distance_m,
+
+        "forest_distance_m":
+            forest_distance_m,
+
+        "near_industry_500m":
+            near_industry_500m,
+
+        "near_industry_2km":
+            near_industry_2km,
+
+        "near_industry_5km":
+            near_industry_5km,
+
+        "near_forest_2km":
+            near_forest_2km,
+
+        # ====================================================
+        # Temporal / persistence features
+        # ====================================================
+
+        "detections_7d":
+            detections_7d,
+
+        "active_days_30d":
+            active_days_30d,
+
+        "persistent_source":
+            persistent_source,
+
+        # ====================================================
+        # Land-cover features
+        # ====================================================
+
+        "is_industrial_land":
+            int(_safe_bool(is_industrial_land)),
+
+        "is_forest_land":
+            int(_safe_bool(is_forest_land)),
+
+        "is_agricultural_land":
+            int(_safe_bool(is_agricultural_land)),
+
+        "is_mining_land":
+            int(_safe_bool(is_mining_land)),
+
+        # ====================================================
+        # Derived thermal indicators
+        # ====================================================
+
+        "high_frp":
+            high_frp,
+
+        "very_high_frp":
+            very_high_frp,
+
+        "high_confidence":
+            high_confidence,
+    }
+
+
+# ============================================================
+# Main feature extraction function
+# ============================================================
 
 def extract_full_feature_vector(
-    hotspot_record: Dict[str, Any],
-    historical_hotspots: Optional[List[Dict[str, Any]]] = None,
-    facilities: Optional[List[Dict[str, Any]]] = None,
-    spectral_data: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Observed features only. Distances are kilometres; missing evidence stays null.
-
-    Persistence counts distinct prior acquisition days within 1 km. Multiple
-    satellites detecting the same site on one day do not create extra persistence.
+    thermal_data: Any = None,
+    context_data: Any = None,
+    **kwargs: Any,
+) -> Dict[str, float]:
     """
-    from shapely.geometry import Point
-    from shapely import wkt
+    Create the complete feature vector used by AgniNetra.
 
-    def number(value):
-        try:
-            result = float(value)
-            return result if np.isfinite(result) else None
-        except (TypeError, ValueError):
-            return None
+    Parameters
+    ----------
+    thermal_data:
+        FIRMS hotspot data. It may be a dictionary,
+        Pydantic object, SQLAlchemy object, etc.
 
-    def timestamp(record):
-        date = record.get("acq_date")
-        if isinstance(date, str):
-            date = datetime.date.fromisoformat(date)
-        if not isinstance(date, datetime.date):
-            return None
-        time = record.get("acq_time")
-        if isinstance(time, str):
-            time = datetime.time.fromisoformat(time) if ":" in time else datetime.time(int(time.zfill(4)[:2]), int(time.zfill(4)[2:]))
-        return datetime.datetime.combine(date, time if isinstance(time, datetime.time) else datetime.time.min)
+    context_data:
+        GIS / contextual information such as industrial
+        distance, forest distance and land-cover information.
 
-    lat, lon = float(hotspot_record["latitude"]), float(hotspot_record["longitude"])
-    current = timestamp(hotspot_record)
-    if current is None:
-        raise ValueError("Acquisition date is required for historical features")
-    features = {name: None for name in FEATURE_COLUMNS}
-    ti4 = number(hotspot_record.get("bright_ti4", hotspot_record.get("brightness")))
-    if ti4 is None:
-        ti4 = number(hotspot_record.get("brightness"))
-    ti5, frp = number(hotspot_record.get("bright_ti5")), number(hotspot_record.get("frp"))
-    raw_conf = hotspot_record.get("confidence")
-    categories = {"l": 30, "low": 30, "n": 65, "nominal": 65, "h": 90, "high": 90}
-    conf = categories.get(str(raw_conf).lower(), number(raw_conf))
-    features.update(brightness=ti4, bright_ti4=ti4, bright_ti5=ti5, frp=frp,
-                    brightness_delta=ti4-ti5 if ti4 is not None and ti5 is not None else None,
-                    confidence=conf, is_nighttime=hotspot_record.get("daynight") == "N",
-                    day_of_year=current.timetuple().tm_yday)
-    distances, mine_distances = [], []
-    inside = False
-    for facility in facilities or []:
-        if facility.get("latitude") is None or facility.get("longitude") is None:
-            continue
-        distance = _haversine_single(lat, lon, facility["latitude"], facility["longitude"])
-        distances.append(distance)
-        if "min" in str(facility.get("facility_type", "")) or "quarry" in str(facility.get("facility_type", "")):
-            mine_distances.append(distance)
-        footprint = facility.get("footprint_wkt")
-        if footprint:
-            try:
-                polygon = wkt.loads(footprint)
-                inside = inside or (polygon.is_valid and polygon.covers(Point(lon, lat)))
-            except Exception:
-                pass
-    features.update(dist_nearest_facility=min(distances) if distances else None,
-                    is_inside_facility=inside,
-                    nearby_facility_count_1km=sum(d <= 1 for d in distances),
-                    nearby_facility_count_5km=sum(d <= 5 for d in distances),
-                    dist_nearest_mine=min(mine_distances) if mine_distances else None)
-    counts = {1: 0, 7: 0, 30: 0, 90: 0}
-    days = {7: set(), 30: set()}
-    hist_frps = []
-    for history in historical_hotspots or []:
-        observed = timestamp(history)
-        if observed is None or observed >= current:
-            continue
-        elapsed = (current-observed).total_seconds() / 86400
-        if elapsed > 90:
-            continue
-        if _haversine_single(lat, lon, history["latitude"], history["longitude"]) > 1:
-            continue
-        for window in counts:
-            if elapsed <= window:
-                counts[window] += 1
-                if window in days:
-                    days[window].add(observed.date())
-        # Baselines compare the same sensor when that metadata is available.
-        historical_frp = number(history.get("frp"))
-        if historical_frp is not None and history.get("satellite") == hotspot_record.get("satellite"):
-            hist_frps.append(historical_frp)
-    median = float(np.median(hist_frps)) if hist_frps else None
-    features.update(nearby_hotspot_count_24h=counts[1], nearby_hotspot_count_7d=counts[7],
-                    nearby_hotspot_count_30d=counts[30], nearby_hotspot_count_90d=counts[90],
-                    persistence_score=len(days[7]), persistence_score_30d=len(days[30]),
-                    recurrence_rate=len(days[30])/30, historical_median_frp=median,
-                    historical_max_frp=max(hist_frps) if hist_frps else None,
-                    frp_to_historical_ratio=frp/median if median and frp is not None else None)
-    spectral = spectral_data or {}
-    for name in ("ndvi_value", "nbr_value", "ndmi_value", "delta_nbr", "cloud_cover_fraction"):
-        features[name] = number(spectral.get(name))
-    features["imagery_available"] = bool(spectral.get("imagery_available", False))
-    features["land_cover_class"] = number(hotspot_record.get("land_cover_class"))
+    kwargs:
+        Individual features can also be supplied directly.
+
+    Returns
+    -------
+    Dict[str, float]
+
+        Clean numerical feature dictionary ready for the
+        prediction pipeline.
+    """
+
+    # --------------------------------------------------------
+    # NASA FIRMS values
+    # --------------------------------------------------------
+
+    brightness = kwargs.get(
+        "brightness",
+        _get_value(
+            thermal_data,
+            "brightness",
+            0
+        )
+    )
+
+    bright_t31 = kwargs.get(
+        "bright_t31",
+        _get_value(
+            thermal_data,
+            "bright_t31",
+            0
+        )
+    )
+
+    frp = kwargs.get(
+        "frp",
+        _get_value(
+            thermal_data,
+            "frp",
+            0
+        )
+    )
+
+    confidence = kwargs.get(
+        "confidence",
+        _get_value(
+            thermal_data,
+            "confidence",
+            0
+        )
+    )
+
+    # --------------------------------------------------------
+    # Industrial proximity
+    # --------------------------------------------------------
+
+    industrial_distance_m = kwargs.get(
+        "industrial_distance_m",
+        _get_value(
+            context_data,
+            "industrial_distance_m",
+            999999
+        )
+    )
+
+    # Support alternate name that may be returned
+    # by another GIS service.
+
+    if industrial_distance_m == 999999:
+
+        industrial_distance_m = _get_value(
+            context_data,
+            "distance_to_industry_m",
+            999999
+        )
+
+    # --------------------------------------------------------
+    # Forest proximity
+    # --------------------------------------------------------
+
+    forest_distance_m = kwargs.get(
+        "forest_distance_m",
+        _get_value(
+            context_data,
+            "forest_distance_m",
+            999999
+        )
+    )
+
+    if forest_distance_m == 999999:
+
+        forest_distance_m = _get_value(
+            context_data,
+            "distance_to_forest_m",
+            999999
+        )
+
+    # --------------------------------------------------------
+    # Historical detection information
+    # --------------------------------------------------------
+
+    detections_7d = kwargs.get(
+        "detections_7d",
+        _get_value(
+            context_data,
+            "detections_7d",
+            0
+        )
+    )
+
+    active_days_30d = kwargs.get(
+        "active_days_30d",
+        _get_value(
+            context_data,
+            "active_days_30d",
+            0
+        )
+    )
+
+    # --------------------------------------------------------
+    # Land-cover information
+    # --------------------------------------------------------
+
+    landcover = kwargs.get(
+        "landcover",
+        _get_value(
+            context_data,
+            "landcover",
+            "unknown"
+        )
+    )
+
+    landcover = normalise_landcover(
+        landcover
+    )
+
+    # Prefer explicitly supplied Boolean values.
+    # Otherwise derive them from land-cover.
+
+    is_industrial_land = kwargs.get(
+        "is_industrial_land",
+        _get_value(
+            context_data,
+            "is_industrial_land",
+            landcover == "industrial"
+        )
+    )
+
+    is_forest_land = kwargs.get(
+        "is_forest_land",
+        _get_value(
+            context_data,
+            "is_forest_land",
+            landcover == "forest"
+        )
+    )
+
+    is_agricultural_land = kwargs.get(
+        "is_agricultural_land",
+        _get_value(
+            context_data,
+            "is_agricultural_land",
+            landcover == "agricultural"
+        )
+    )
+
+    is_mining_land = kwargs.get(
+        "is_mining_land",
+        _get_value(
+            context_data,
+            "is_mining_land",
+            landcover == "mining"
+        )
+    )
+
+    # --------------------------------------------------------
+    # Build feature dictionary
+    # --------------------------------------------------------
+
+    features = build_context_features(
+
+        brightness=brightness,
+
+        bright_t31=bright_t31,
+
+        frp=frp,
+
+        confidence=confidence,
+
+        industrial_distance_m=
+            industrial_distance_m,
+
+        forest_distance_m=
+            forest_distance_m,
+
+        detections_7d=
+            detections_7d,
+
+        active_days_30d=
+            active_days_30d,
+
+        is_industrial_land=
+            is_industrial_land,
+
+        is_forest_land=
+            is_forest_land,
+
+        is_agricultural_land=
+            is_agricultural_land,
+
+        is_mining_land=
+            is_mining_land,
+    )
+
     return features
 
 
-def _haversine_single(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Haversine distance between two single points in kilometres."""
-    r = 6371.0
-    dlat = np.radians(lat2 - lat1)
-    dlon = np.radians(lon2 - lon1)
-    a = (
-        np.sin(dlat / 2.0) ** 2
-        + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2.0) ** 2
-    )
-    return float(2.0 * r * np.arcsin(np.sqrt(a)))
+# ============================================================
+# Convenience function for FIRMS records
+# ============================================================
 
+def extract_firms_features(
+    firms_record: Any
+) -> Dict[str, float]:
+    """
+    Extract the core NASA FIRMS thermal features.
 
-def _haversine_vectorized(
-    lat1: float, lon1: float, lat2: np.ndarray, lon2: np.ndarray
-) -> np.ndarray:
-    """Vectorized haversine distance in kilometres."""
-    r = 6371.0
-    dlat = np.radians(lat2 - lat1)
-    dlon = np.radians(lon2 - lon1)
-    a = (
-        np.sin(dlat / 2.0) ** 2
-        + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2.0) ** 2
+    Useful when contextual GIS information has not yet
+    been collected.
+    """
+
+    return build_context_features(
+
+        brightness=_get_value(
+            firms_record,
+            "brightness",
+            0
+        ),
+
+        bright_t31=_get_value(
+            firms_record,
+            "bright_t31",
+            0
+        ),
+
+        frp=_get_value(
+            firms_record,
+            "frp",
+            0
+        ),
+
+        confidence=_get_value(
+            firms_record,
+            "confidence",
+            0
+        ),
     )
-    return 2.0 * r * np.arcsin(np.sqrt(a))

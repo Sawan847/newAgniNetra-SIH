@@ -46,7 +46,7 @@ export function AnalyticsPage() {
       .finally(() => {
         setLoading(false);
       });
-  }, []);
+  }, [addToast]);
 
   // Format classification pie data
   const classPieData = data?.classification_distribution

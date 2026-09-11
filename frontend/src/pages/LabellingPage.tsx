@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { Card, MetricCard, CardHeader } from "../components/common/Card";
 import { Button } from "../components/common/Button";
 import { FireClassBadge } from "../components/common/Badge";
@@ -28,7 +28,7 @@ export function LabellingPage() {
   const [labelSource, setLabelSource] = useState<string>("analyst_verified");
   const [submitting, setSubmitting] = useState(false);
 
-  const loadData = () => {
+  const loadData = useCallback(() => {
     setLoading(true);
     Promise.all([
       hotspotsApi.list({ per_page: 50 }),
@@ -37,12 +37,15 @@ export function LabellingPage() {
       .then(([hotspotsRes, feedbackRes]) => {
         const hList = hotspotsRes.data || [];
         setQueue(hList);
-        if (hList.length > 0 && !selectedHotspot) {
-          setSelectedHotspot(hList[0]);
-          if (hList[0].predicted_class) {
-            setVerifiedClass(hList[0].predicted_class);
+        setSelectedHotspot((curr) => {
+          if (!curr && hList.length > 0) {
+            if (hList[0].predicted_class) {
+              setVerifiedClass(hList[0].predicted_class);
+            }
+            return hList[0];
           }
-        }
+          return curr;
+        });
         setFeedbackHistory(feedbackRes.data || []);
       })
       .catch((err) => {
@@ -55,11 +58,11 @@ export function LabellingPage() {
       .finally(() => {
         setLoading(false);
       });
-  };
+  }, [addToast]);
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [loadData]);
 
   const handleSelectHotspot = (h: Hotspot) => {
     setSelectedHotspot(h);

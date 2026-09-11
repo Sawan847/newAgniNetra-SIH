@@ -159,7 +159,7 @@ def seed_database() -> None:
             {
                 "lat": 22.4690, "lon": 69.8680, "bright": 345.2, "frp": 65.0, "conf": 88.0,
                 "sat": "SNPP", "inst": "VIIRS", "daynight": "N",
-                "pred_class": "persistent_thermal_source", "conf_score": 0.97,
+                "pred_class": "persistent_industrial_source", "conf_score": 0.97,
                 "dist_fac": 0.05, "dist_road": 0.3, "dist_for": 9.0,
                 "p_score": 12.0, "cov": 50,
                 "alert_sev": "low", "alert_type": "flare_monitoring",
@@ -167,7 +167,7 @@ def seed_database() -> None:
             {
                 "lat": 20.1500, "lon": 78.6500, "bright": 360.8, "frp": 210.0, "conf": 90.0,
                 "sat": "NOAA-20", "inst": "VIIRS", "daynight": "D",
-                "pred_class": "forest_natural_fire", "conf_score": 0.92,
+                "pred_class": "forest_or_natural_fire", "conf_score": 0.92,
                 "dist_fac": 25.0, "dist_road": 4.5, "dist_for": 0.1,
                 "p_score": 0.0, "cov": 10,
                 "alert_sev": "high", "alert_type": "wildfire_alert",
@@ -183,7 +183,7 @@ def seed_database() -> None:
             {
                 "lat": 22.3600, "lon": 82.6900, "bright": 338.5, "frp": 85.0, "conf": 82.0,
                 "sat": "SNPP", "inst": "VIIRS", "daynight": "N",
-                "pred_class": "mining_thermal", "conf_score": 0.86,
+                "pred_class": "mining_or_other", "conf_score": 0.86,
                 "dist_fac": 1.2, "dist_road": 1.0, "dist_for": 3.0,
                 "p_score": 4.0, "cov": 60,
                 "alert_sev": "medium", "alert_type": "mining_activity",
@@ -254,10 +254,15 @@ def seed_database() -> None:
             if sc["pred_class"] == "accidental_industrial_fire":
                 feedback = AnalystFeedback(
                     id=uuid.uuid4(),
+                    hotspot_id=h_id,
                     prediction_id=pred.id,
                     user_id=demo_user.id,
+                    suggested_class=sc["pred_class"],
+                    verified_class="accidental_industrial_fire",
                     corrected_class=None,
                     is_correct=True,
+                    reviewer_name=demo_user.full_name,
+                    label_source="analyst_verified",
                     notes="Verified against on-site industrial sensor logs.",
                 )
                 db.add(feedback)

@@ -38,7 +38,7 @@ export function FacilitiesPage() {
       .finally(() => {
         setLoading(false);
       });
-  }, []);
+  }, [addToast]);
 
   const filteredFacilities = useMemo(() => {
     return facilities.filter((f) => {

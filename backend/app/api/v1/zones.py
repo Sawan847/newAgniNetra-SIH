@@ -62,8 +62,8 @@ def create_zone(req: ZoneCreate, db: Session = Depends(get_db)):
         sensitivity=req.sensitivity,
         alert_email=req.alert_email,
         is_active=req.is_active,
-        created_at=datetime.datetime.utcnow(),
-        updated_at=datetime.datetime.utcnow(),
+        created_at=datetime.datetime.now(datetime.timezone.utc),
+        updated_at=datetime.datetime.now(datetime.timezone.utc),
     )
     db.add(zone)
     db.commit()

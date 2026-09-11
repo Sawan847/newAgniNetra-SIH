@@ -48,7 +48,7 @@ def login(credentials: UserLoginRequest, db: Session = Depends(get_db)):
             detail="Account has been deactivated",
         )
 
-    user.last_login = datetime.datetime.utcnow()
+    user.last_login = datetime.datetime.now(datetime.timezone.utc)
     db.commit()
     db.refresh(user)
 

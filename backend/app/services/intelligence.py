@@ -306,7 +306,7 @@ def run_intelligence_pipeline(
         "risk_score": risk_result["risk_score"],
         "risk_level": risk_result["risk_level"],
         "alert_id": str(alert_obj.id) if alert_obj else None,
-        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     broadcaster.publish("hotspot_detected", telemetry_payload)
     if alert_created:

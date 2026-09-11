@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { OrbitArtwork } from "../components/layout/OrbitArtwork";
 import { CommandMap } from "../components/map/CommandMap";
@@ -74,20 +74,7 @@ export function OperationsPage() {
     return () => clearInterval(interval);
   }, [replayMode, isPlaying, replaySpeed, sortedHotspots.length]);
 
-  // Named SSE events invalidate database results; snapshot observations stay dated.
-  useEffect(() => {
-    const es = new EventSource(`${API_BASE}/events/stream`);
-    const refresh = () => { if (!snapshotModeRef.current) fetchHotspots(); };
-    es.addEventListener("hotspot_detected", refresh);
-    return () => es.close();
-  }, [filterClass, minFrp, filterSatellite, snapshotMode]);
-
-  useEffect(() => {
-    facilitiesApi.list({ per_page: 500 }).then(r => { if (!snapshotModeRef.current) setFacilities(r.data); })
-      .catch(() => { if (!snapshotModeRef.current) setFacilities([]); });
-  }, []);
-
-  const fetchHotspots = () => {
+  const fetchHotspots = useCallback(() => {
     if (snapshotMode) return;
     setLoading(true);
     hotspotsApi
@@ -104,13 +91,26 @@ export function OperationsPage() {
       .finally(() => {
         setLoading(false);
       });
-  };
+  }, [snapshotMode, minFrp, filterSatellite, filterClass, addToast]);
+
+  // Named SSE events invalidate database results; snapshot observations stay dated.
+  useEffect(() => {
+    const es = new EventSource(`${API_BASE}/events/stream`);
+    const refresh = () => { if (!snapshotModeRef.current) fetchHotspots(); };
+    es.addEventListener("hotspot_detected", refresh);
+    return () => es.close();
+  }, [fetchHotspots]);
+
+  useEffect(() => {
+    facilitiesApi.list({ per_page: 500 }).then(r => { if (!snapshotModeRef.current) setFacilities(r.data); })
+      .catch(() => { if (!snapshotModeRef.current) setFacilities([]); });
+  }, []);
 
   useEffect(() => {
     fetchHotspots();
-  }, [filterClass, minFrp, filterSatellite, snapshotMode]);
+  }, [fetchHotspots]);
 
-  const loadSnapshot = async () => {
+  const loadSnapshot = useCallback(async () => {
     setLoading(true);
     try {
       const response = await fetch("/data/observations.json");
@@ -127,16 +127,19 @@ export function OperationsPage() {
       setSelectedHotspot(nearest || null);
       setReplayMode(false);
       setIsPlaying(false);
-    } catch (err) { addToast({ type: "danger", title: "Snapshot unavailable", message: err instanceof Error ? err.message : "Download failed" }); }
-    finally { setLoading(false); }
-  };
+    } catch (err) {
+      addToast({ type: "danger", title: "Snapshot unavailable", message: err instanceof Error ? err.message : "Download failed" });
+    } finally {
+      setLoading(false);
+    }
+  }, [addToast]);
 
   useEffect(() => {
     if (searchParams.get("snapshot") === "1") {
       void loadSnapshot();
       setSearchParams({}, { replace: true });
     }
-  }, [searchParams]);
+  }, [searchParams, loadSnapshot, setSearchParams]);
 
   const handleSelectHotspot = (h: Hotspot) => {
     setSelectedHotspot(h);

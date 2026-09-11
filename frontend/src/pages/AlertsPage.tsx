@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { Card, MetricCard, CardHeader } from "../components/common/Card";
 import { Button } from "../components/common/Button";
 import { StatusBadge } from "../components/common/StatusBadge";
@@ -38,7 +38,7 @@ export function AlertsPage() {
   const [resolutionNotes, setResolutionNotes] = useState("");
   const [submittingResolve, setSubmittingResolve] = useState(false);
 
-  const fetchAlerts = () => {
+  const fetchAlerts = useCallback(() => {
     setLoading(true);
     alertsApi
       .list({
@@ -54,7 +54,7 @@ export function AlertsPage() {
       .finally(() => {
         setLoading(false);
       });
-  };
+  }, [filterSeverity, filterStatus, addToast]);
 
   const handleAssignAnalyst = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,7 +99,7 @@ export function AlertsPage() {
 
   useEffect(() => {
     fetchAlerts();
-  }, [filterSeverity, filterStatus]);
+  }, [fetchAlerts]);
 
   // Load hotspots for create modal
   useEffect(() => {

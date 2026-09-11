@@ -52,9 +52,7 @@ export function InvestigationPage() {
         frp: h.frp || null,
       }));
       setHotspotsList(items);
-      if (!selectedId && items.length > 0) {
-        setSelectedId(items[0].id);
-      }
+      setSelectedId((prev) => (!prev && items.length > 0 ? items[0].id : prev));
     });
   }, []);
 
@@ -84,7 +82,7 @@ export function InvestigationPage() {
       .finally(() => {
         setLoading(false);
       });
-  }, [selectedId]);
+  }, [selectedId, addToast]);
 
   const latestPrediction: PredictionRead | null =
     hotspot?.predictions && hotspot.predictions.length > 0
@@ -99,7 +97,7 @@ export function InvestigationPage() {
       addToast({
         type: "success",
         title: "Prediction Pipeline Finished",
-        message: `Classified as ${FIRE_CLASS_LABELS[res.data.predicted_class]}`,
+        message: `Classified as ${FIRE_CLASS_LABELS[res.data.predicted_class] || res.data.predicted_class}`,
       });
       // Refresh hotspot details
       const fresh = await hotspotsApi.get(selectedId);

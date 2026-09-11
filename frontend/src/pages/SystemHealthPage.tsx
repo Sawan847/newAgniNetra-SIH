@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Card, CardHeader } from "../components/common/Card";
 import { Button } from "../components/common/Button";
 import { StatusBadge } from "../components/common/StatusBadge";
@@ -26,7 +26,7 @@ export function SystemHealthPage() {
   const [bboxStr, setBboxStr] = useState("69.65, 22.15, 70.15, 22.65"); // India bbox
   const [triggering, setTriggering] = useState(false);
 
-  const loadHealthData = () => {
+  const loadHealthData = useCallback(() => {
     setLoading(true);
     Promise.all([systemApi.status(), ingestionApi.runs({ limit: 25 })])
       .then(([sysStatus, runsRes]) => {
@@ -43,11 +43,11 @@ export function SystemHealthPage() {
       .finally(() => {
         setLoading(false);
       });
-  };
+  }, [addToast]);
 
   useEffect(() => {
     loadHealthData();
-  }, []);
+  }, [loadHealthData]);
 
   const handleTriggerIngest = async (e: React.FormEvent) => {
     e.preventDefault();

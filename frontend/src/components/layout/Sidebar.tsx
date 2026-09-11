@@ -10,6 +10,7 @@ export interface NavItemDef {
   icon: React.ReactNode;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const NAV_ITEMS: NavItemDef[] = [
   {
     key: "nav.command_centre",

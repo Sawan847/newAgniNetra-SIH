@@ -92,7 +92,7 @@ def download_incident_report(
     if feedback:
         verification_dict = {
             "verified_class": feedback.verified_class,
-            "reviewer_notes": feedback.reviewer_notes,
+            "reviewer_notes": feedback.notes,
             "verified_at": str(feedback.created_at),
         }
 
