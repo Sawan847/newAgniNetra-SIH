@@ -27,12 +27,36 @@ from app.services.geometry import validate_bbox
 
 logger = logging.getLogger(__name__)
 
+# The FIRMS MAP_KEY travels inside the URL path, not a header. httpx logs every
+# request line at INFO ("HTTP Request: GET <full url> ..."), so enabling INFO logging
+# anywhere in the process printed the raw key to the console and into any log file,
+# defeating the masking this module does on its own log lines. Any secret carried in
+# a URL path leaks exactly this way.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 # Supported NASA FIRMS NRT VIIRS sources
-SUPPORTED_FIRMS_SOURCES = [
+FIRMS_NRT_SOURCES = [
     "VIIRS_SNPP_NRT",
     "VIIRS_NOAA20_NRT",
     "VIIRS_NOAA21_NRT",
 ]
+
+# Standard-processing archive products. VIIRS_SNPP_SP reaches back to 2012,
+# MODIS_SP to 2000.
+#
+# These matter more than the NRT feed for this problem statement. India's fire
+# regime is strongly seasonal - paddy residue burns Oct-Nov, wheat residue Apr-May,
+# forest fires Feb-Jun - and NRT retains only about two months. A live pull landing
+# in the monsoon contains almost no agricultural or vegetation fire at all, so
+# demonstrating those classes at all requires the archive.
+FIRMS_SP_SOURCES = [
+    "VIIRS_SNPP_SP",
+    "VIIRS_NOAA20_SP",
+    "MODIS_SP",
+]
+
+SUPPORTED_FIRMS_SOURCES = FIRMS_NRT_SOURCES + FIRMS_SP_SOURCES
 
 # Required columns in FIRMS VIIRS CSV responses
 REQUIRED_CSV_COLUMNS = [
@@ -240,6 +264,12 @@ class FIRMSClient:
                     "acq_time": acq_time_obj,
                     "daynight": daynight,
                     "source": source_label,
+                    # NASA's own coarse inference, present on the SP archive products and
+                    # absent from NRT: 0 vegetation fire, 1 volcano, 2 other static land
+                    # source, 3 offshore. Deliberately NOT a model feature and NOT a weak-label
+                    # source - it is kept purely as an independent baseline to measure against.
+                    # Training on NASA's guess and then scoring against it would be circular.
+                    "firms_type": self._safe_float(row.get("type")),
                     "raw_data": dict(row),
                 }
                 records.append(record)

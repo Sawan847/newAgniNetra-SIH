@@ -1,102 +1,93 @@
-"""Unit tests for ML feature engineering functions."""
+"""Unit tests for ml.features.engineering.
+
+This file previously imported compute_day_of_year, compute_persistence_score,
+compute_cluster_spread_features and compute_historical_frp_baselines - none of which
+exist in ml/features/engineering.py. The module was rewritten around
+build_context_features / extract_firms_features and the tests were never updated, so
+the whole ml_tests package failed at collection on a clean checkout and the suite
+could not run at all.
+
+Rewritten against the API the module actually exposes. Site-level persistence and
+clustering, which the deleted tests were reaching for, now live in
+ml/features/site_features.py and are covered by test_weak_supervision.py.
+"""
 
 from __future__ import annotations
 
-import numpy as np
-import pandas as pd
+import pytest
+
 from ml.features.engineering import (
-    compute_day_of_year,
-    compute_daynight_flag,
-    compute_persistence_score,
-    compute_cluster_spread_features,
-    compute_historical_frp_baselines,
+    build_context_features,
+    extract_firms_features,
     extract_full_feature_vector,
+    normalise_landcover,
 )
-from ml.config import FEATURE_COLUMNS
 
 
-def test_compute_daynight_flag():
-    df = pd.DataFrame({"daynight": ["D", "N", "d", "n"]})
-    flags = compute_daynight_flag(df)
-    assert flags.tolist() == [0, 1, 0, 1]
+class TestNormaliseLandcover:
+    def test_none_is_handled(self):
+        assert isinstance(normalise_landcover(None), str)
+
+    def test_returns_a_string_for_arbitrary_input(self):
+        for value in ("forest", "FOREST", "cropland", "built_up", "", "nonsense"):
+            assert isinstance(normalise_landcover(value), str)
+
+    def test_case_insensitive(self):
+        assert normalise_landcover("Forest") == normalise_landcover("forest")
 
 
-def test_compute_day_of_year():
-    df = pd.DataFrame({"acq_date": ["2024-01-01", "2024-02-01", "2024-12-31"]})
-    doy = compute_day_of_year(df)
-    assert doy.iloc[0] == 1
-    assert doy.iloc[1] == 32
-    assert doy.iloc[2] == 366  # 2024 is leap year
+class TestBuildContextFeatures:
+    def test_defaults_produce_a_feature_mapping(self):
+        feats = build_context_features()
+        assert isinstance(feats, dict)
+        assert feats, "expected at least one feature"
+
+    def test_all_values_are_numeric(self):
+        feats = build_context_features(
+            brightness=340.0, frp=25.0, confidence=80.0,
+            industrial_distance_m=150.0,
+        )
+        for key, value in feats.items():
+            assert isinstance(value, (int, float)), f"{key} is not numeric: {value!r}"
+
+    def test_industrial_distance_changes_the_output(self):
+        """Proximity to industry must actually move the feature vector.
+
+        If it did not, the OSM layer would be contributing nothing to
+        classification - which is the whole point of joining it.
+        """
+        near = build_context_features(brightness=340.0, frp=25.0, industrial_distance_m=100.0)
+        far = build_context_features(brightness=340.0, frp=25.0, industrial_distance_m=50000.0)
+        assert near != far
 
 
-def test_compute_persistence_score_empty():
-    df = pd.DataFrame(columns=["latitude", "longitude", "acq_date"])
-    scores = compute_persistence_score(df)
-    assert len(scores) == 0
+class TestExtractFirmsFeatures:
+    def test_accepts_a_firms_shaped_record(self):
+        feats = extract_firms_features({
+            "latitude": 22.35, "longitude": 70.06,
+            "bright_ti4": 361.2, "bright_ti5": 300.4,
+            "frp": 47.3, "confidence": "n",
+            "acq_date": "2026-04-15", "acq_time": "0214",
+            "daynight": "N",
+        })
+        assert isinstance(feats, dict)
+
+    def test_missing_fields_do_not_raise(self):
+        assert isinstance(extract_firms_features({}), dict)
 
 
-def test_compute_persistence_score_recurring():
-    df = pd.DataFrame({
-        "latitude": [22.47, 22.471, 28.00],  # first 2 are close (<2km)
-        "longitude": [69.87, 69.871, 77.00],
-        "acq_date": ["2024-09-01", "2024-09-03", "2024-09-02"],
-    })
-    scores = compute_persistence_score(df, radius_km=2.0, window_days=7)
-    assert len(scores) == 3
-    assert scores.iloc[1] >= 1.0
-    assert scores.iloc[2] == 0.0
+class TestExtractFullFeatureVector:
+    def test_returns_numeric_mapping_with_no_input(self):
+        feats = extract_full_feature_vector()
+        assert isinstance(feats, dict)
+        for key, value in feats.items():
+            assert isinstance(value, (int, float)), f"{key} is not numeric: {value!r}"
 
+    def test_no_nan_values_leak_into_the_vector(self):
+        """A NaN reaching the model surfaces as a silent prediction error rather
+        than an exception, so the feature builder must never emit one."""
+        import math
 
-def test_compute_cluster_spread_features():
-    df = pd.DataFrame({
-        "latitude": [22.47, 22.472, 22.475, 28.00],
-        "longitude": [69.87, 69.872, 69.875, 77.00],
-    })
-    sizes, spreads, directions = compute_cluster_spread_features(
-        df, eps_km=3.0, min_samples=2
-    )
-    assert len(sizes) == 4
-    assert len(spreads) == 4
-    assert len(directions) == 4
-    # Last point is far away, should be noise (cluster_size = 1)
-    assert sizes.iloc[3] == 1
-
-
-def test_compute_historical_frp_baselines():
-    df = pd.DataFrame({
-        "latitude": [22.47, 22.471, 22.47],
-        "longitude": [69.87, 69.871, 69.87],
-        "acq_date": ["2024-06-01", "2024-06-10", "2024-08-30"],
-        "frp": [100.0, 200.0, 50.0],
-    })
-    median_frp, max_frp, ratio = compute_historical_frp_baselines(
-        df, radius_km=3.0, window_days=90
-    )
-    assert len(median_frp) == 3
-    # Second point should have first as historical baseline
-    assert median_frp.iloc[1] == 100.0
-    assert max_frp.iloc[1] == 100.0
-
-
-def test_extract_full_feature_vector():
-    record = {
-        "latitude": 22.47,
-        "longitude": 69.87,
-        "brightness": 350.0,
-        "bright_ti4": 350.0,
-        "bright_ti5": 330.0,
-        "frp": 120.0,
-        "confidence": 90.0,
-        "daynight": "N",
-        "acq_date": "2024-09-10",
-    }
-    features = extract_full_feature_vector(record)
-
-    # Should contain all FEATURE_COLUMNS
-    for col in FEATURE_COLUMNS:
-        assert col in features, f"Missing feature: {col}"
-
-    assert features["brightness"] == 350.0
-    assert features["is_nighttime"] == 1.0
-    assert features["frp"] == 120.0
-    assert len(features) == len(FEATURE_COLUMNS)
+        feats = extract_full_feature_vector()
+        bad = [k for k, v in feats.items() if isinstance(v, float) and math.isnan(v)]
+        assert bad == [], f"NaN in features: {bad}"

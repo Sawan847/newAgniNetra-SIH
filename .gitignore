@@ -68,3 +68,9 @@ logs/
 
 # ===== PostgreSQL =====
 pgdata/
+
+# Local SQLite demo databases (regenerate with scripts/seed_from_pipeline.py)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { ToastProvider } from "../common/Toast";
@@ -7,6 +7,7 @@ import { ToastProvider } from "../common/Toast";
 export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { pathname } = useLocation();
 
   return (
     <ToastProvider>
@@ -28,7 +29,10 @@ export function AppShell() {
 
         <div className="app-shell__main">
           <Header onMobileMenuToggle={() => setMobileOpen((prev) => !prev)} />
-          <main className="app-shell__content">
+          {/* key on pathname so the entrance animation replays on every
+              navigation - without it React reuses the node and the transition
+              only ever plays once, on first mount. */}
+          <main className="app-shell__content agni-page-enter" key={pathname}>
             <Outlet />
           </main>
         </div>

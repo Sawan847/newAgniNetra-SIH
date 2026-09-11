@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles/index.css";
 import "./styles/observatory.css";
+// Loaded last so the motion layer can lift the observatory styling additively.
+import "./styles/motion.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

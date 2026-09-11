@@ -1,0 +1,192 @@
+/* ============================================================================
+   AgniNetra — motion layer
+   ----------------------------------------------------------------------------
+   Loaded last, so it can lift the existing observatory styling without forking
+   it. Every rule here is additive: remove this file and the app still renders.
+
+   The governing idea is that this is a monitoring console, not a marketing page.
+   Motion is used where it carries information — a value arriving, a critical
+   detection demanding attention, a panel entering in reading order — and stays
+   out of the way everywhere else. Nothing loops forever except the two things
+   that genuinely represent live state: the ingest beacon and the critical pulse.
+
+   Every animation is disabled wholesale under prefers-reduced-motion at the
+   bottom of this file, and nothing here parks an element at opacity:0 without a
+   guaranteed way back, so the page is readable even if animations never run.
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- easing */
+:root {
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --motion-fast: 180ms;
+  --motion-base: 340ms;
+  --motion-slow: 620ms;
+}
+
+/* ------------------------------------------------- staggered panel entrance
+   Panels enter in reading order rather than all at once, which makes a dense
+   dashboard resolve into a hierarchy instead of arriving as a wall.
+   The animation is `backwards`-filled so the pre-delay state is the hidden one,
+   and `forwards` so it holds visible afterwards — an element can never be left
+   stranded mid-transition. */
+@keyframes agni-rise {
+  from { opacity: 0; transform: translate3d(0, 14px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+.agni-stagger > * {
+  animation: agni-rise var(--motion-base) var(--ease-out-expo) both;
+}
+.agni-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.agni-stagger > *:nth-child(2) { animation-delay: 55ms; }
+.agni-stagger > *:nth-child(3) { animation-delay: 110ms; }
+.agni-stagger > *:nth-child(4) { animation-delay: 165ms; }
+.agni-stagger > *:nth-child(5) { animation-delay: 220ms; }
+.agni-stagger > *:nth-child(6) { animation-delay: 275ms; }
+.agni-stagger > *:nth-child(n + 7) { animation-delay: 320ms; }
+
+/* Route-level entrance for a whole page body. */
+.agni-page-enter {
+  animation: agni-rise var(--motion-slow) var(--ease-out-expo) both;
+}
+
+/* ------------------------------------------------------------- metric cards
+   A card lifts slightly and warms its border on hover. The transform is kept to
+   translate/scale so it composites on the GPU and never triggers layout. */
+.metric-card {
+  transition:
+    transform var(--motion-fast) var(--ease-out-quart),
+    box-shadow var(--motion-fast) var(--ease-out-quart),
+    border-color var(--motion-fast) linear;
+  will-change: transform;
+}
+.metric-card:hover {
+  transform: translate3d(0, -3px, 0);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.45);
+}
+
+/* Tabular figures so a counting number does not jitter its own width as digits
+   change. Without this the whole card twitches while the value animates. */
+.metric-card__value,
+.agni-count {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* The unit sits outside the animated counter so it stays still while the digits
+   move, and is set smaller so the number stays the dominant element. */
+.metric-card__suffix {
+  font-size: 0.55em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  opacity: 0.72;
+  margin-left: 0.18em;
+}
+
+/* ------------------------------------------------------- critical pulse ring
+   Reserved strictly for accidental_industrial_fire — the one class in this
+   system that means "something is going wrong right now". Using it anywhere else
+   would spend the only attention-grabbing motion on the page on routine data. */
+@keyframes agni-pulse-ring {
+  0%   { box-shadow: 0 0 0 0 var(--danger-glow, rgba(239, 68, 68, 0.35)); }
+  70%  { box-shadow: 0 0 0 14px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+.agni-critical {
+  animation: agni-pulse-ring 2.1s var(--ease-out-quart) infinite;
+  border-radius: inherit;
+}
+
+/* ------------------------------------------------------------- live beacon
+   A slow two-stage breath on the ingest indicator. Signals "connected and
+   polling" without the nervous blink of a 1s flash. */
+@keyframes agni-beacon {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.42; transform: scale(0.82); }
+}
+
+.agni-beacon {
+  animation: agni-beacon 2.6s ease-in-out infinite;
+}
+
+/* -------------------------------------------------------------- data arrival
+   A one-shot sweep across a panel when fresh telemetry lands, so a refresh is
+   visible without a layout change. Applied then removed by the caller. */
+@keyframes agni-sweep {
+  from { background-position: -160% 0; }
+  to   { background-position: 260% 0; }
+}
+
+.agni-refreshed {
+  background-image: linear-gradient(
+    100deg,
+    transparent 32%,
+    rgba(245, 158, 11, 0.13) 50%,
+    transparent 68%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: agni-sweep 1s var(--ease-out-quart) 1;
+}
+
+/* ------------------------------------------------------------ class swatches
+   The legend dots and class chips get a soft glow matching their semantic
+   colour, which makes the map legend readable at a glance on a dark ground. */
+.agni-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.06), 0 0 10px 0 currentColor;
+  transition: transform var(--motion-fast) var(--ease-spring);
+}
+.agni-swatch:hover { transform: scale(1.45); }
+
+/* ------------------------------------------------------------- nav feedback */
+.nav-item,
+.sidebar__link,
+a[class*="nav"] {
+  transition:
+    background-color var(--motion-fast) linear,
+    color var(--motion-fast) linear,
+    transform var(--motion-fast) var(--ease-out-quart);
+}
+.nav-item:hover,
+.sidebar__link:hover {
+  transform: translate3d(2px, 0, 0);
+}
+
+/* --------------------------------------------------------------- table rows
+   Rows warm on hover. Alert tables are scanned, not read, so the row under the
+   cursor needs to separate itself from its neighbours immediately. */
+tbody tr {
+  transition: background-color var(--motion-fast) linear;
+}
+
+/* ------------------------------------------------------------- focus states
+   Keyboard focus must stay obvious — motion work is a common place to
+   accidentally remove it. */
+:where(a, button, [role="button"], input, select, textarea):focus-visible {
+  outline: 2px solid var(--warning, #f59e0b);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* -------------------------------------------------------------- reduced motion
+   One blanket switch. Elements still end in their visible resting state because
+   every entrance above animates opacity/transform from hidden *to* shown, so
+   cancelling the animation leaves the final CSS value in force. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .agni-stagger > * { animation-delay: 0ms !important; }
+}

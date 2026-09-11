@@ -266,7 +266,7 @@ export function OperationsPage() {
       </div>
       {snapshotMode && <p className="snapshot-note">Actual NASA observations, unclassified. OSM facilities cover Jamnagar. Import the CSV into the database for filters, enrichment and saved actions.</p>}
       {/* KPI Header Grid */}
-      <div className="metrics-grid">
+      <div className="metrics-grid agni-stagger">
         <MetricCard
           label="Displayed Thermal Detections"
           value={loading ? "..." : metrics.total}
@@ -276,6 +276,7 @@ export function OperationsPage() {
         <MetricCard
           label="High-FRP Observations"
           value={loading ? "..." : metrics.critical}
+          critical={metrics.critical > 0}
           meta="FRP > 150 MW · screening threshold"
           icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 10 18H2L12 3Z"/><path d="M12 9v5m0 3v1"/></svg>}
           trend={metrics.critical > 0 ? "up" : "neutral"}
@@ -288,7 +289,8 @@ export function OperationsPage() {
         />
         <MetricCard
           label="Peak Radiative Power"
-          value={loading ? "..." : `${Math.round(metrics.maxFrp)} MW`}
+          value={loading ? "..." : Math.round(metrics.maxFrp)}
+          suffix=" MW"
           meta="Highest thermal intensity"
           icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2c2 5-4 6-2 10 2 0 4-3 4-5 4 3 6 8 3 12-3 4-10 3-12-1C2 12 8 6 13 2Z"/></svg>}
         />

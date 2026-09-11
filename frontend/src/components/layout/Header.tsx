@@ -60,7 +60,7 @@ export function Header({ onMobileMenuToggle }: HeaderProps) {
             </button>
           )}
           <div className="header__badge">
-            <span className={`pulse-dot ${sseConnected ? "pulse-dot--success" : "pulse-dot--warning"}`} />
+            <span className={`pulse-dot agni-beacon ${sseConnected ? "pulse-dot--success" : "pulse-dot--warning"}`} />
             <span>SIH26162 · Prototype</span>
           </div>
           <div>
@@ -94,7 +94,7 @@ export function Header({ onMobileMenuToggle }: HeaderProps) {
               color: activeAlertsCount > 0 ? "var(--danger)" : undefined,
             }}
           >
-            {activeAlertsCount > 0 && <span className="pulse-dot pulse-dot--danger" />}
+            {activeAlertsCount > 0 && <span className="pulse-dot pulse-dot--danger agni-beacon" />}
             <span>{t("header.alerts_active")}</span>
             {activeAlertsCount > 0 && (
               <span
