@@ -1,0 +1,90 @@
+name: AgniNetra CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  backend-tests:
+    name: Backend Tests & ML Validation
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: agninetra
+          POSTGRES_PASSWORD: agninetra_test
+          POSTGRES_DB: agninetra_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Apply migrations to PostGIS
+        working-directory: backend
+        env:
+          ENVIRONMENT: testing
+          DATABASE_URL: postgresql://agninetra:agninetra_test@localhost:5432/agninetra_test
+          PYTHONPATH: ..:.
+        run: python -m alembic upgrade head
+
+      - name: Run Pytest Test Suite
+        env:
+          ENVIRONMENT: testing
+          DATABASE_URL: sqlite:///:memory:
+          SECRET_KEY: test-secret-key-must-be-at-least-32-chars-long
+          PYTHONPATH: .:backend
+        run: |
+          pytest tests/ -v --basetemp=.tmp_ci_basetemp
+
+  frontend-tests:
+    name: Frontend Quality & Production Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript Type Check
+        run: npm run typecheck
+
+      - name: Unit & Component Tests (Vitest)
+        run: npm run test
+
+      - name: Build Production Distribution Bundle
+        run: npm run build

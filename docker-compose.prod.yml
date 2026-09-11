@@ -1,0 +1,82 @@
+# Local staging template; access control and operational validation remain incomplete.
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: agninetra-prod-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agninetra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a unique database password in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-agninetra_db}
+    volumes:
+      - pgdata_prod:/var/lib/postgresql/data
+      - ./infra/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agninetra} -d ${POSTGRES_DB:-agninetra_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: agninetra-prod-backend
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"]
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-agninetra}:${POSTGRES_PASSWORD:?Set a unique database password in .env}@db:5432/${POSTGRES_DB:-agninetra_db}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: production
+      SECRET_KEY: ${SECRET_KEY:?Set a random signing key in .env}
+      FIRMS_MAP_KEY: ${FIRMS_MAP_KEY:-}
+      OSM_OVERPASS_URL: ${OSM_OVERPASS_URL:-https://overpass-api.de/api/interpreter}
+      EE_PROJECT_ID: ${EE_PROJECT_ID:-}
+      EE_SERVICE_ACCOUNT: ${EE_SERVICE_ACCOUNT:-}
+      EE_PRIVATE_KEY: ${EE_PRIVATE_KEY:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      ALERT_NOTIFICATION_EMAIL: ${ALERT_NOTIFICATION_EMAIL:-}
+      PYTHONPATH: /app:/app/backend
+    volumes:
+      - ./ml:/app/ml:ro
+      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/api/v1/health/ready\")'"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    container_name: agninetra-prod-frontend
+    ports:
+      - "127.0.0.1:${HTTP_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+volumes:
+  pgdata_prod:
+    driver: local
