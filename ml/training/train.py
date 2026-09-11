@@ -1,4 +1,34 @@
-"""AgniNetra AI — Machine Learning Training & Model Comparison Pipeline.
+"""DEPRECATED - superseded by ml.training.train_pipeline.
+
+NOT USED FOR INFERENCE. No live endpoint loads a model from this module any more:
+app.services.intelligence, app.api.v1.predictions and app.api.v1.model_metrics all
+route through app.services.classifier, backed by ml.training.train_pipeline.
+
+Why it was retired
+------------------
+generate_synthetic_training_data() below builds each class's *feature vector* from
+hand-written per-class distributions - dist_nearest_facility, frp, persistence_score
+and the rest are all drawn from ranges chosen to match the label. A classifier
+trained on that learns to invert those if-statements, so the macro-F1 it reports
+measures how well scikit-learn can reverse-engineer the generator. It says nothing
+about real fires.
+
+load_classifier_pipeline() additionally trained on that synthetic data on first call
+when no artifact existed, so a production endpoint could fit a model to invented data
+during a request and then serve it indefinitely.
+
+The replacement trains on detections that carry no label: features come from observed
+behaviour and real OSM geometry, labels are derived independently by
+ml.labeling.weak_labels:
+
+    python scripts/build_dataset.py --source sim      # offline
+    python scripts/build_dataset.py --source firms    # live NASA FIRMS
+
+Retained only so existing imports and the tests covering this module keep resolving.
+
+Original docstring follows.
+---
+AgniNetra AI — Machine Learning Training & Model Comparison Pipeline.
 
 Features:
 - Geographic Group-based train/validation splitting (GroupKFold)

@@ -27,25 +27,53 @@ from app.services.gee import SatelliteFeatureService
 from app.services.risk import calculate_risk_score
 from app.services.geometry import point_coordinates, decode_geometry
 from ml.features.engineering import extract_full_feature_vector
-from ml.training.train import load_classifier_pipeline
+from app.services.classifier import classifier_service
 
 logger = logging.getLogger(__name__)
 
 # Global singletons
 satellite_service = SatelliteFeatureService()
-_classifier_pipeline = None
+
+def _landcover_to_code(landcover) -> int:
+    """Map a land-cover label onto the ESA WorldCover codes the labelling rules use.
+
+    ml.labeling.weak_labels reads numeric WorldCover codes (10 tree, 20 shrub,
+    40 cropland, 50 built-up, 60 bare). This service carries land cover as a string,
+    so without translation every detection would arrive with an unknown surface type
+    and the wildfire and crop-residue rules could not fire.
+
+    Returns 0 for anything unrecognised, which the rules treat as "unknown" and
+    handle with their behavioural fallbacks - never as a guess.
+    """
+    t = str(landcover or "").strip().lower()
+    if not t:
+        return 0
+    if any(k in t for k in ("forest", "tree", "wood")):
+        return 10
+    if any(k in t for k in ("shrub", "scrub")):
+        return 20
+    if any(k in t for k in ("grass", "meadow", "herbaceous")):
+        return 30
+    if any(k in t for k in ("crop", "farm", "agri", "orchard")):
+        return 40
+    if any(k in t for k in ("built", "urban", "industrial", "settlement")):
+        return 50
+    if any(k in t for k in ("bare", "sparse", "quarry", "mine", "rock", "sand")):
+        return 60
+    return 0
 
 
 def get_classifier():
-    """Lazy-load the two-stage ML classifier."""
-    global _classifier_pipeline
-    if _classifier_pipeline is None:
-        try:
-            _classifier_pipeline = load_classifier_pipeline(str(__import__("pathlib").Path(settings.ml_artifacts_dir) / "fire_classifier.joblib"))
-        except Exception as exc:
-            logger.warning("Could not load trained classifier (%s); falling back to None", exc)
-            _classifier_pipeline = None
-    return _classifier_pipeline
+    """Return the site-level classifier service, or None if no artifact is present.
+
+    Previously loaded fire_classifier.joblib through
+    ml.training.train.load_classifier_pipeline - the deprecated two-stage model fitted
+    on synthetically generated per-class feature distributions. That model learned to
+    invert the generator's if-statements, so every prediction it served carried no
+    information about real fires. It now loads the artifact produced by
+    ml.training.train_pipeline from weakly-supervised real detections.
+    """
+    return classifier_service if classifier_service.load() else None
 
 
 def run_intelligence_pipeline(
@@ -169,10 +197,43 @@ def run_intelligence_pipeline(
         db.add(feat_obj)
 
     # 6. ML Model Inference
+    #
+    # The neighbourhood is passed in deliberately: persistence ratio and a site's own
+    # FRP baseline - the two features that separate a routine gas flare from an
+    # industrial accident - cannot be computed from a single detection.
     model = get_classifier()
     if model is not None:
-        df_features = pd.DataFrame([feature_dict])
-        pred_details = model.predict_detailed(df_features)[0]
+        pred_details = model.classify_hotspot_legacy(
+            hotspot_record={
+                "latitude": hotspot.latitude,
+                "longitude": hotspot.longitude,
+                "bright_ti4": hotspot.bright_ti4 if hotspot.bright_ti4 is not None else hotspot.brightness,
+                "bright_ti5": hotspot.bright_ti5,
+                "frp": hotspot.frp,
+                "confidence": hotspot.confidence,
+                "acq_date": hotspot.acq_date.isoformat() if hotspot.acq_date else None,
+                "daynight": hotspot.daynight or "D",
+                "satellite": hotspot.satellite,
+                "land_cover_class": _landcover_to_code(land_cover),
+            },
+            neighbour_records=[
+                {
+                    "latitude": h["latitude"],
+                    "longitude": h["longitude"],
+                    "bright_ti4": None,
+                    "bright_ti5": None,
+                    "frp": h.get("frp"),
+                    "confidence": None,
+                    "acq_date": h["acq_date"].isoformat() if h.get("acq_date") else None,
+                    "daynight": "D",
+                    "satellite": h.get("satellite"),
+                    "land_cover_class": 0,
+                }
+                for h in hist_dicts
+                if h.get("acq_date") is not None
+            ],
+            facilities=facility_dicts,
+        )
     else:
         pred_details = {
             "predicted_class": "uncertain", "confidence_score": None,

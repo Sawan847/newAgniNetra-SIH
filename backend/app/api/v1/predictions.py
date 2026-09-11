@@ -20,22 +20,20 @@ from app.schemas.prediction import (
     PredictResponse,
 )
 from app.services.gee import SatelliteFeatureService
-from ml.features.engineering import extract_full_feature_vector
-from ml.training.train import load_classifier_pipeline
 
 router = APIRouter()
 
-# Global cached instances
 satellite_service = SatelliteFeatureService()
-classifier_pipeline = None
 
-
-def get_classifier():
-    """Lazy loader for the two-stage classifier pipeline."""
-    global classifier_pipeline
-    if classifier_pipeline is None:
-        classifier_pipeline = load_classifier_pipeline()
-    return classifier_pipeline
+# This module no longer loads a classifier of its own. /predict delegates to
+# app.services.intelligence.run_intelligence_pipeline, which is the single place
+# inference happens - so there is one feature path and one model, and the two cannot
+# drift apart.
+#
+# The removed loader called ml.training.train.load_classifier_pipeline, which trained
+# on synthetically generated per-class feature distributions when no artifact was
+# found. That meant a production endpoint could fit a model to invented data on its
+# first request and then serve it indefinitely.
 
 
 @router.get(

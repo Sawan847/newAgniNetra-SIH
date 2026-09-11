@@ -178,6 +178,70 @@ class ThermalClassifierService:
             "predicted_class": predicted,
         }
 
+    def classify_hotspot_legacy(
+        self,
+        hotspot_record: Dict[str, Any],
+        neighbour_records: Optional[List[Dict[str, Any]]] = None,
+        facilities: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Score one detection and return the shape the older call sites expect.
+
+        `intelligence.py` and `predictions.py` were written against
+        TwoStageThermalClassifier.predict_detailed(), which returned
+        predicted_class / confidence_score / class_probabilities /
+        feature_importances / explanation. Rather than rewrite both pipelines around
+        the new return shape, this adapter maps the site-level classifier onto that
+        contract so the rewire is a two-line change at each call site.
+
+        Neighbours matter. Persistence and a site's own FRP baseline cannot be
+        computed from a single detection, so `neighbour_records` should carry the
+        surrounding spatial-temporal window. With none supplied the detection still
+        classifies, but as a site of size one - which is legitimately what an
+        isolated one-off fire looks like.
+
+        Never raises. A classification failure returns an explicit abstention rather
+        than a guess, because a silent fallback to a made-up class is exactly the
+        behaviour this rewrite exists to remove.
+        """
+        records = [hotspot_record] + list(neighbour_records or [])
+        try:
+            scored = self.classify_detections(
+                records, facilities=facilities or [], target_index=0
+            )[0]
+        except Exception as exc:  # noqa: BLE001 - must degrade, never 500 the caller
+            logger.warning("Classification unavailable (%s); abstaining", str(exc)[:120])
+            return {
+                "predicted_class": "uncertain",
+                "confidence_score": None,
+                "class_probabilities": None,
+                "feature_importances": {},
+                "explanation": {
+                    "primary_driver": "Classifier unavailable",
+                    "top_factors": [str(exc)[:160]],
+                    "method": "abstention",
+                    "requires_human_review": True,
+                },
+            }
+
+        evidence = scored.get("evidence", {}) or {}
+        return {
+            "predicted_class": scored["predicted_class"],
+            "confidence_score": scored["confidence"],
+            "class_probabilities": scored["class_probabilities"],
+            # The deployed bundle publishes no global importance vector. Returning an
+            # empty map is honest; the per-detection evidence below is what actually
+            # explains this prediction.
+            "feature_importances": {},
+            "explanation": {
+                "primary_driver": evidence.get("primary", "Insufficient measured evidence"),
+                "top_factors": evidence.get("factors", []),
+                "method": "site-level classification with abstention",
+                "requires_human_review": scored.get("requires_human_review", False),
+                "site_id": scored.get("site_id"),
+                "persistence_ratio": scored.get("persistence_ratio"),
+            },
+        }
+
     @staticmethod
     def context_window(acq_date: datetime.date) -> tuple:
         """Date range to pull neighbouring detections for persistence computation."""
